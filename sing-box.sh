@@ -30,6 +30,7 @@ export vless_port=${PORT:-$(shuf -i 1000-65000 -n 1)}
 export CFIP=${CFIP:-'cdns.doon.eu.org'} 
 export ARGO_PORT=${ARGO_PORT:-'8001'} 
 export CFPORT=${CFPORT:-'443'} 
+export WEB_PORT=${WEB_PORT:-'6783'}  # nginx 自带默认站点原本占用 80 端口，改到这里（VPS 商禁止 80/443/8080/8443 对外 Web）
 
 # 检查是否为root下运行
 [[ $EUID -ne 0 ]] && red "请在root用户下运行脚本，可输入 sudo -i 回车切换到root用户" && exit 1
@@ -592,6 +593,23 @@ EOF
     yellow "\n==========================================================================================\n"
 }
 
+# 把 nginx 包自带默认站点的 80 端口改为 $WEB_PORT，并隐藏 nginx 版本号
+move_default_site_port() {
+    local f
+    for f in /etc/nginx/sites-available/default /etc/nginx/conf.d/default.conf /etc/nginx/http.d/default.conf /etc/nginx/nginx.conf; do
+        [ -f "$f" ] || continue
+        sed -i -E "s/(listen[[:space:]]+)80([[:space:];])/\1${WEB_PORT}\2/g; s/(listen[[:space:]]+)\[::\]:80([[:space:];])/\1[::]:${WEB_PORT}\2/g" "$f" > /dev/null 2>&1
+    done
+    if [ -f /etc/nginx/nginx.conf ]; then
+        if grep -qE '^[[:space:]]*#[[:space:]]*server_tokens' /etc/nginx/nginx.conf; then
+            sed -i -E 's/^([[:space:]]*)#[[:space:]]*server_tokens[^;]*;/\1server_tokens off;/' /etc/nginx/nginx.conf
+        elif ! grep -qE '^[[:space:]]*server_tokens' /etc/nginx/nginx.conf; then
+            sed -i -E '0,/^[[:space:]]*http[[:space:]]*\{/s//http {\n    server_tokens off;/' /etc/nginx/nginx.conf
+        fi
+    fi
+    allow_port ${WEB_PORT}/tcp > /dev/null 2>&1
+}
+
 # nginx订阅配置
 add_nginx_conf() {
     if ! command_exists nginx; then
@@ -623,7 +641,7 @@ server {
         add_header Expires "0";
     }
 
-    location / { return 404; }
+    location / { return 444; }
 
     location ~ /\. {
         deny all;
@@ -659,6 +677,8 @@ http {
 }
 EOF
     fi
+
+    move_default_site_port
 
     if nginx -t > /dev/null 2>&1; then
         nginx -s reload > /dev/null 2>&1 || start_nginx > /dev/null 2>&1
@@ -768,7 +788,7 @@ uninstall_singbox() {
 create_shortcut() {
     cat > "$work_dir/sb.sh" << 'EOF'
 #!/usr/bin/env bash
-bash <(curl -Ls https://raw.githubusercontent.com/eooce/sing-box/main/sing-box.sh) $1
+bash <(curl -Ls https://raw.githubusercontent.com/Ncight/Sing-box/main/sing-box.sh) $1
 EOF
     chmod +x "$work_dir/sb.sh"
     ln -sf "$work_dir/sb.sh" /usr/bin/sb
